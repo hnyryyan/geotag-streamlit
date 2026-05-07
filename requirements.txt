@@ -4,6 +4,6 @@ folium
 streamlit-folium
 pandas
 numpy
-opencv-python
+# opencv-python
 requests
-math
+# math

@@ -11,6 +11,9 @@ import requests
 from io import BytesIO
 import math
 
+# [Sisanya sama persis dengan kode yang saya kirimkan sebelumnya]
+# ... (kode lengkap dari pesan sebelumnya)
+
 # Set page config
 st.set_page_config(page_title="Geotag Photo Editor", layout="wide")
 
