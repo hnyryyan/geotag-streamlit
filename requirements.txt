@@ -5,3 +5,5 @@ streamlit-folium
 pandas
 numpy
 opencv-python
+requests
+math
