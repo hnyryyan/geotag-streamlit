@@ -3,18 +3,13 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
 import os
-import tempfile
 import zipfile
 from datetime import datetime
 import folium
 from streamlit_folium import folium_static
-import pandas as pd
-import numpy as np
-import cv2
-import base64
-import piexif
 import requests
-import pip
+from io import BytesIO
+import math
 
 # Set page config
 st.set_page_config(page_title="Geotag Photo Editor", layout="wide")
@@ -24,306 +19,529 @@ st.markdown("""
 <style>
     .stButton>button {
         width: 100%;
-        background-color: #4CAF50;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         font-weight: bold;
+        border-radius: 10px;
+        padding: 0.75rem;
+        border: none;
     }
     .main-header {
         text-align: center;
         padding: 1.5rem;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
-        border-radius: 10px;
+        border-radius: 15px;
         margin-bottom: 2rem;
-    }
-    .info-box {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Header
-st.markdown('<div class="main-header"><h1>🗺️ Geotag Photo Editor Pro</h1><p>Tambahkan geotag kustom ke foto dengan berbagai template</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header"><h1>📱 Geotag Photo Editor</h1><p>Template border 3/4 lebar foto | Teks lengkap</p></div>', unsafe_allow_html=True)
 
-# Template definitions
-def get_templates():
-    return {
-        "Modern Dark": {
-            "bg_color": (0, 0, 0, 180),
-            "text_color": (255, 255, 255),
-            "border_radius": 10,
-            "padding": 15,
-            "font_size": 24,
-            "icon": "📍"
-        },
-        "Vintage Paper": {
-            "bg_color": (210, 180, 140, 200),
-            "text_color": (139, 69, 19),
-            "border_radius": 5,
-            "padding": 12,
-            "font_size": 22,
-            "icon": "📜"
-        },
-        "Neon Green": {
-            "bg_color": (0, 0, 0, 200),
-            "text_color": (0, 255, 0),
-            "border_radius": 8,
-            "padding": 10,
-            "font_size": 26,
-            "icon": "⚡"
-        },
-        "Elegant Gold": {
-            "bg_color": (255, 255, 255, 230),
-            "text_color": (184, 134, 11),
-            "border_radius": 15,
-            "padding": 12,
-            "font_size": 23,
-            "icon": "✨"
-        },
-        "Beach Style": {
-            "bg_color": (135, 206, 235, 200),
-            "text_color": (25, 25, 112),
-            "border_radius": 20,
-            "padding": 12,
-            "font_size": 22,
-            "icon": "🏖️"
-        },
-        "Cyberpunk": {
-            "bg_color": (25, 25, 112, 220),
-            "text_color": (255, 0, 255),
-            "border_radius": 3,
-            "padding": 10,
-            "font_size": 25,
-            "icon": "🦾"
+def get_static_map_image(latitude, longitude, width=300, height=300, zoom=15):
+    """Download static map from CartoDB Positron (free, no API key)"""
+    try:
+        # CartoDB Light All - clean bright map with labels [citation:6][citation:7]
+        # URL format uses standard tile server: https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png
+        # No API key required, just proper attribution [citation:2][citation:8]
+        
+        # Get tile coordinates for given lat/lon and zoom level
+        import math
+        lat_rad = math.radians(latitude)
+        n = 2.0 ** zoom
+        x_tile = int((longitude + 180.0) / 360.0 * n)
+        y_tile = int((1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
+        
+        # CartoDB tile server (free, no API key needed) [citation:1][citation:4]
+        # Using light_all variant for bright basemap with labels
+        url = f"https://a.basemaps.cartocdn.com/light_all/{zoom}/{x_tile}/{y_tile}.png"
+        
+        # Optional: Add proper attribution (required by CartoDB license) [citation:8][citation:9]
+        # attribution: '© OpenStreetMap contributors, © CARTO'
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-    }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            map_img = Image.open(BytesIO(response.content))
+            map_img = map_img.resize((width, height), Image.Resampling.LANCZOS)
+            
+            # Add red pin marker at center [citation:2]
+            draw = ImageDraw.Draw(map_img)
+            cx, cy = width // 2, height // 2
+            
+            # Draw pin marker
+            draw.ellipse([cx - 4, cy + 2, cx + 4, cy + 8], fill=(0, 0, 0, 100))  # shadow
+            draw.polygon([(cx, cy - 10), (cx - 5, cy + 3), (cx, cy), (cx + 5, cy + 3)], 
+                        fill=(255, 40, 40, 255))  # pin body
+            draw.ellipse([cx - 4, cy - 14, cx + 4, cy - 6], fill=(255, 40, 40, 255))  # pin head
+            draw.ellipse([cx - 1.5, cy - 11, cx + 1.5, cy - 9], fill=(255, 255, 255, 255))  # inner circle
+            
+            return map_img
+        else:
+            # Try alternative subdomain
+            alt_url = f"https://b.basemaps.cartocdn.com/light_all/{zoom}/{x_tile}/{y_tile}.png"
+            response = requests.get(alt_url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                map_img = Image.open(BytesIO(response.content))
+                map_img = map_img.resize((width, height), Image.Resampling.LANCZOS)
+                # Add pin marker (same code as above)
+                draw = ImageDraw.Draw(map_img)
+                cx, cy = width // 2, height // 2
+                draw.ellipse([cx - 4, cy + 2, cx + 4, cy + 8], fill=(0, 0, 0, 100))
+                draw.polygon([(cx, cy - 10), (cx - 5, cy + 3), (cx, cy), (cx + 5, cy + 3)], 
+                            fill=(255, 40, 40, 255))
+                draw.ellipse([cx - 4, cy - 14, cx + 4, cy - 6], fill=(255, 40, 40, 255))
+                draw.ellipse([cx - 1.5, cy - 11, cx + 1.5, cy - 9], fill=(255, 255, 255, 255))
+                return map_img
+            
+    except Exception as e:
+        print(f"Map download error: {e}")
+    
+    # Fallback: Custom map jika CartoDB gagal
+    return create_fallback_map(latitude, longitude, width, height)
 
-def add_geotag_to_image(image_bytes, latitude, longitude, datetime_str, template_name, custom_text=""):
-    """Add geotag text to image without piexif"""
-    # Convert bytes to PIL Image
-    img = Image.open(io.BytesIO(image_bytes))
-    
-    # Convert to RGB if needed
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    
-    draw = ImageDraw.Draw(img)
-    
-    templates = get_templates()
-    template = templates.get(template_name, templates["Modern Dark"])
-    
-    # Try to load font with multiple fallbacks
-    font = None
-    font_paths = [
-        "arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
-        "C:\\Windows\\Fonts\\Arial.ttf",  # Windows
-        "/System/Library/Fonts/Helvetica.ttc"  # Mac
-    ]
-    
-    for font_path in font_paths:
+def create_fallback_map(latitude, longitude, width, height):
+    """Custom fallback map if tile server fails"""
+    try:
+        map_img = Image.new('RGB', (width, height), color=(245, 245, 235))  # like light map
+        draw = ImageDraw.Draw(map_img)
+        
+        # Draw simple grid
+        for i in range(4):
+            y = 5 + i * (height // 4)
+            draw.line([(5, y), (width - 5, y)], fill=(180, 180, 170), width=1)
+            x = 5 + i * (width // 4)
+            draw.line([(x, 5), (x, height - 5)], fill=(180, 180, 170), width=1)
+        
+        # Pin marker
+        cx, cy = width // 2, height // 2
+        draw.ellipse([cx - 4, cy + 2, cx + 4, cy + 8], fill=(100, 100, 100))
+        draw.polygon([(cx, cy - 10), (cx - 5, cy + 3), (cx, cy), (cx + 5, cy + 3)], fill=(200, 60, 60))
+        draw.ellipse([cx - 4, cy - 14, cx + 4, cy - 6], fill=(200, 60, 60))
+        
+        # Add text for coordinates
+        coord_text = f"{abs(latitude):.4f}°, {abs(longitude):.4f}°"
         try:
-            font = ImageFont.truetype(font_path, template["font_size"])
+            font = ImageFont.truetype("arial.ttf", 10)
+        except:
+            font = ImageFont.load_default()
+        draw.text((5, height - 14), coord_text, fill=(100, 100, 100), font=font)
+        
+        return map_img
+    except:
+        return None
+
+
+def wrap_text(text, font, max_width, draw):
+    """Wrap text automatically based on width"""
+    if not text:
+        return []
+    
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        line_width = bbox[2] - bbox[0]
+        
+        if line_width <= max_width:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    return lines if lines else [text]
+
+def create_geotag_overlay(photo_width, photo_height, data):
+    """Create geotag overlay - width 3/4 of photo (max 600px)"""
+    
+    # Lebar border = 3/4 lebar foto, maksimal 800px (biar ga terlalu lebar)
+    template_width = min(int(photo_width * 0.75), 800)
+    template_width = max(template_width, 320)  # Minimal 320px
+    
+    # Ukuran font berdasarkan lebar (tetap besar untuk teks panjang)
+    if template_width <= 350:
+        header_font_size = 24
+        address_font_size = 14
+        label_font_size = 16
+        value_font_size = 18
+        map_size = 100
+        line_height = 30
+    elif template_width <= 450:
+        header_font_size = 30
+        address_font_size = 16
+        label_font_size = 20
+        value_font_size = 22
+        map_size = 120
+        line_height = 38
+    else:
+        header_font_size = 38
+        address_font_size = 18
+        label_font_size = 22
+        value_font_size = 24
+        map_size = 140
+        line_height = 45
+    
+    # Load fonts
+    font_paths = {
+        'bold': ["arialbd.ttf", "arial.ttf", "C:\\Windows\\Fonts\\arialbd.ttf", 
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
+        'regular': ["arial.ttf", "C:\\Windows\\Fonts\\arial.ttf", 
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    }
+    
+    font_header = None
+    font_address = None
+    font_label = None
+    font_value = None
+    
+    for font_path in font_paths['bold']:
+        try:
+            font_header = ImageFont.truetype(font_path, header_font_size)
+            font_value = ImageFont.truetype(font_path, value_font_size)
             break
         except:
             continue
     
-    if font is None:
-        font = ImageFont.load_default()
+    for font_path in font_paths['regular']:
+        try:
+            font_address = ImageFont.truetype(font_path, address_font_size)
+            font_label = ImageFont.truetype(font_path, label_font_size)
+            break
+        except:
+            continue
     
-    # Format geotag text
-    location_text = f"{latitude:.6f}, {longitude:.6f}"
+    if font_header is None:
+        font_header = ImageFont.load_default()
+        font_value = ImageFont.load_default()
+    if font_address is None:
+        font_address = ImageFont.load_default()
+        font_label = ImageFont.load_default()
     
-    if custom_text:
-        geotag_text = f"{template['icon']} {custom_text}\n📍 {location_text}\n📅 {datetime_str}"
+    # Temporary draw for calculations
+    temp_img = Image.new('RGBA', (template_width, 100), (0, 0, 0, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
+    
+    # Calculate wrapped texts (TIDAK DISINGKAT)
+    header_max_width = template_width - 30
+    location_name = data.get('location_name', 'Surabaya, Jawa Timur, Indonesia')
+    header_lines = wrap_text(location_name, font_header, header_max_width, temp_draw)
+    
+    address_max_width = template_width - map_size - 30
+    address = data.get('address', 'Jl. Pantai Kenjeran, Sukolilo Baru, Kec. Bulak, Surabaya, Jawa Timur')
+    address_lines = wrap_text(address, font_address, address_max_width, temp_draw)
+    
+    # Kordinat text (tidak diwrap)
+    lat_text = data.get('latitude_text', '-7.213549.0° S')
+    lon_text = data.get('longitude_text', '112.769214° E')
+    date_text = data.get('date_text', 'Selasa, 07 Apr 2026')
+    
+    # Calculate dynamic height
+    header_height = 15 + (len(header_lines) * line_height)
+    map_height = map_size
+    address_height = len(address_lines) * (address_font_size + 8)
+    coord_height = value_font_size * 2 + 25
+    date_height = value_font_size + 15
+    
+    content_height = max(map_height, address_height + coord_height + date_height)
+    template_height = header_height + content_height + 35
+    
+    # Create overlay
+    overlay = Image.new('RGBA', (template_width, template_height), color=(0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    text_color = (255, 255, 255, 255)
+    gray_color = (200, 200, 200, 255)
+    
+    # Draw border
+    border_margin = 8
+    draw.rectangle([border_margin, border_margin, 
+                    template_width - border_margin, template_height - border_margin], 
+                   outline="white", width=4)
+    
+    # Header (wrapped - FULL TEXT)
+    header_y = 25
+    header_x = 16
+    for line in header_lines:
+        draw.text((header_x, header_y), line, font=font_header, fill=text_color)
+        header_y += line_height
+    
+    header_bottom = header_y + 8
+    
+    # Separator line di bawah header
+    sep_y = header_bottom
+    draw.line([(16, sep_y), (template_width - 16, sep_y)], fill=text_color, width=1)
+    
+    header_bottom = sep_y + 12
+    
+    # Map box
+    map_box_x = 16
+    map_box_y = header_bottom
+    map_box_width = map_size
+    map_box_height = map_size
+    
+    # Draw map box border
+    draw.rectangle([map_box_x, map_box_y, map_box_x + map_box_width, map_box_y + map_box_height], 
+                   outline="white", width=1)
+    
+    # Try to add static map
+    map_img = data.get('map_image')
+    if map_img:
+        try:
+            map_img_resized = map_img.resize((map_box_width - 2, map_box_height - 2))
+            overlay.paste(map_img_resized, (map_box_x + 1, map_box_y + 1))
+        except:
+            draw.text((map_box_x + map_box_width//2 - 20, map_box_y + map_box_height//2 - 10), 
+                     "🗺️", font=font_label, fill=gray_color)
+            draw.text((map_box_x + 5, map_box_y + map_box_height - 20), 
+                     f"{data.get('latitude', 0):.1f}, {data.get('longitude', 0):.1f}", 
+                     font=font_address, fill=gray_color)
     else:
-        geotag_text = f"{template['icon']} Location: {location_text}\n📅 {datetime_str}"
+        # Fallback jika map gagal
+        draw.rectangle([map_box_x + 2, map_box_y + 2, 
+                        map_box_x + map_box_width - 2, map_box_y + map_box_height - 2], 
+                       fill=(50, 50, 80, 150))
+        draw.text((map_box_x + map_box_width//2 - 25, map_box_y + map_box_height//2 - 10), 
+                 "📍 MAP", font=font_label, fill=gray_color)
+        draw.text((map_box_x + 5, map_box_y + map_box_height - 18), 
+                 f"{abs(data.get('latitude', 0)):.2f}°, {abs(data.get('longitude', 0)):.2f}°", 
+                 font=font_address, fill=gray_color)
     
-    # Calculate text size
-    try:
-        bbox = draw.multiline_textbbox((0, 0), geotag_text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-    except:
-        text_width = len(geotag_text) * template["font_size"] // 2
-        text_height = template["font_size"] * 3
+    # Address (wrapped - FULL TEXT)
+    address_x = map_box_x + map_box_width + 16
+    address_y = map_box_y
+    for line in address_lines:
+        draw.text((address_x, address_y), line, font=font_address, fill=text_color)
+        address_y += address_font_size + 6
     
-    # Position (bottom right)
-    padding = template["padding"]
-    x = img.width - text_width - padding * 2
-    y = img.height - text_height - padding * 2
+    # Coordinates - horizontal layout (label dan nilai sejajar)
+    if address_lines:
+        coord_y = address_y + 10
+    else:
+        coord_y = map_box_y + map_box_height + 10
     
-    # Draw rounded rectangle background
-    overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
+    # Latitude - label dan nilai sejajar horizontal
+    draw.text((address_x, coord_y), "Latitude", font=font_value, fill=text_color)
+    draw.text((address_x + 130, coord_y), lat_text, font=font_label, fill=text_color)
     
-    # Draw rectangle with rounded corners
-    overlay_draw.rectangle(
-        [x - padding, y - padding, x + text_width + padding, y + text_height + padding],
-        fill=template["bg_color"],
-        outline=None
-    )
+    # Longitude - label dan nilai sejajar horizontal
+    coord_y_lon = coord_y + value_font_size + 12
+    draw.text((address_x, coord_y_lon), "Longitude", font=font_value, fill=text_color)
+    draw.text((address_x + 130, coord_y_lon), lon_text, font=font_label, fill=text_color)
     
-    # Composite the overlay
-    img = img.convert('RGBA')
-    img = Image.alpha_composite(img, overlay)
+    # Date (FULL FORMAT - Selasa, 07 Apr 2026) - putih
+    date_y = coord_y_lon + value_font_size + 15
+    draw.text((address_x, date_y), date_text, font=font_value, fill=text_color)
     
-    # Draw text on the image
-    draw = ImageDraw.Draw(img)
-    draw.multiline_text((x, y), geotag_text, fill=template["text_color"], font=font)
-    
-    # Convert back to RGB for JPEG
-    rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-    rgb_img.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-    
-    # Save to bytes
-    output = io.BytesIO()
-    rgb_img.save(output, format='JPEG', quality=95)
-    output.seek(0)
-    
-    return output
+    return overlay
 
-# Sidebar
+def format_coordinate_dms(coord, is_latitude):
+    """Format koordinat ke DMS (Degrees Minutes Seconds)"""
+    if coord is None:
+        return "0° 0' 0\""
+    
+    abs_coord = abs(coord)
+    degrees = int(abs_coord)
+    minutes = int((abs_coord - degrees) * 60)
+    seconds = int(((abs_coord - degrees) * 60 - minutes) * 60)
+    
+    direction = ""
+    if is_latitude:
+        direction = "S" if coord < 0 else "N"
+    else:
+        direction = "E" if coord > 0 else "W"
+    
+    return f"{degrees}° {minutes}' {seconds}\" {direction}"
+
+def add_geotag_to_image(image_bytes, data):
+    """Add geotag overlay to image"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        img_width, img_height = img.size
+        
+        # Create overlay
+        overlay = create_geotag_overlay(img_width, img_height, data)
+        overlay_width, overlay_height = overlay.size
+        
+        # Position at bottom center
+        margin_bottom = 20
+        x = (img_width - overlay_width) // 2
+        y = img_height - overlay_height - margin_bottom
+        x = max(5, x)
+        
+        img_rgba = img.convert('RGBA')
+        result = Image.new('RGBA', img_rgba.size, (0, 0, 0, 0))
+        result.paste(img_rgba, (0, 0))
+        result.paste(overlay, (x, y), overlay)
+        
+        rgb_result = Image.new('RGB', result.size, (255, 255, 255))
+        rgb_result.paste(result, mask=result.split()[3] if len(result.split()) > 3 else None)
+        
+        output = io.BytesIO()
+        rgb_result.save(output, format='JPEG', quality=95)
+        output.seek(0)
+        
+        return output
+        
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+        return None
+
+# Sidebar settings
 with st.sidebar:
     st.header("⚙️ Pengaturan")
     
-    # Coordinate input
-    st.subheader("📍 Koordinat")
+    st.subheader("📍 Lokasi")
+    location_name = st.text_area("Nama Tempat", 
+                                  value="Surabaya, Jawa Timur, Indonesia",
+                                  height=68,
+                                  help="Bisa panjang, akan auto wrap")
+    
+    address = st.text_area("Alamat Lengkap", 
+                           value="Jl. Pantai Kenjeran, Sukolilo Baru, Kec. Bulak, Surabaya, Jawa Timur",
+                           height=100,
+                           help="Alamat panjang akan auto wrap")
+    
+    st.subheader("🗺️ Koordinat")
     col1, col2 = st.columns(2)
     with col1:
-        latitude = st.number_input("Latitude", value=-6.200000, format="%.6f", 
-                                  help="Contoh: -6.200000 untuk Jakarta")
+        latitude = st.number_input("Latitude", value=-7.213549, format="%.6f")
     with col2:
-        longitude = st.number_input("Longitude", value=106.816666, format="%.6f",
-                                   help="Contoh: 106.816666 untuk Jakarta")
+        longitude = st.number_input("Longitude", value=112.769214, format="%.6f")
     
-    # Show map
-    if st.checkbox("Tampilkan Peta", value=True):
-        m = folium.Map(location=[latitude, longitude], zoom_start=12)
-        folium.Marker(
-            [latitude, longitude],
-            popup=f"📍 {latitude}, {longitude}",
-            icon=folium.Icon(color='red', icon='info-sign')
-        ).add_to(m)
-        folium_static(m, width=300, height=250)
+    coord_format = st.radio("Format Koordinat", ["Decimal", "DMS"])
     
-    # Time settings
-    st.subheader("⏰ Waktu")
-    use_custom_time = st.checkbox("Gunakan waktu kustom")
-    if use_custom_time:
-        custom_datetime = st.datetime_input("Pilih waktu", datetime.now())
-        datetime_str = custom_datetime.strftime("%d/%m/%Y %H:%M:%S")
+    if coord_format == "Decimal":
+        lat_dir = "S" if latitude < 0 else "N"
+        lon_dir = "E" if longitude > 0 else "W"
+        latitude_text = f"{abs(latitude):.6f}° {lat_dir}"
+        longitude_text = f"{abs(longitude):.6f}° {lon_dir}"
     else:
-        datetime_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        st.info(f"Waktu sekarang: {datetime_str}")
+        latitude_text = format_coordinate_dms(latitude, True)
+        longitude_text = format_coordinate_dms(longitude, False)
     
-    # Template
-    st.subheader("🎨 Template")
-    template_name = st.selectbox("Pilih style", list(get_templates().keys()))
+    st.subheader("📅 Tanggal")
+    use_custom_date = st.checkbox("Gunakan tanggal kustom")
+    if use_custom_date:
+        custom_date = st.date_input("Pilih tanggal", datetime.now())
+        day_name = custom_date.strftime("%A")
+        day_ind = {"Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu",
+                   "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu",
+                   "Sunday": "Minggu"}.get(day_name, day_name)
+        date_text = f"{day_ind}, {custom_date.day:02d} {custom_date.strftime('%b')} {custom_date.year}"
+    else:
+        now = datetime.now()
+        day_name = now.strftime("%A")
+        day_ind = {"Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu",
+                   "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu",
+                   "Sunday": "Minggu"}.get(day_name, day_name)
+        date_text = f"{day_ind}, {now.day:02d} {now.strftime('%b')} {now.year}"
     
-    # Custom text
-    st.subheader("✏️ Teks Kustom")
-    custom_text = st.text_area("Teks tambahan", placeholder="Misal: Pantai Kuta, Bali", height=80)
+    st.subheader("👁️ Preview")
     
-    # Preview
-    if st.checkbox("Preview template"):
-        st.info(f"""
-        **Template:** {template_name}
-        **Contoh:**
-        {get_templates()[template_name]['icon']} {custom_text if custom_text else 'Contoh Lokasi'}
-        📍 {latitude:.6f}, {longitude:.6f}
-        📅 {datetime_str}
-        """)
+    # Get map image for preview
+    map_img = get_static_map_image(latitude, longitude, 140, 140, 16)
+    
+    preview_data = {
+        'location_name': location_name,
+        'address': address,
+        'latitude_text': latitude_text,
+        'longitude_text': longitude_text,
+        'date_text': date_text,
+        'map_image': map_img,
+        'latitude': latitude,
+        'longitude': longitude
+    }
+    
+    preview_overlay = create_geotag_overlay(800, 600, preview_data)
+    st.image(preview_overlay, caption=f"Preview Template", use_container_width=True)
+    st.caption(f"📐 Lebar border = {min(int(800 * 0.75), 600)}px (3/4 lebar foto, max 600px)")
 
 # Main content
-st.subheader("📸 Upload & Edit Foto")
+st.subheader("📸 Upload Foto")
 
-# Multiple file upload
 uploaded_files = st.file_uploader(
-    "Pilih foto (bisa banyak sekaligus)",
-    type=['jpg', 'jpeg', 'png', 'JPG', 'JPEG', 'PNG'],
-    accept_multiple_files=True,
-    help="Support JPG, JPEG, PNG"
+    "Pilih foto (bisa banyak)",
+    type=['jpg', 'jpeg', 'png'],
+    accept_multiple_files=True
 )
 
 if uploaded_files:
-    st.success(f"✓ {len(uploaded_files)} foto siap diproses")
+    for f in uploaded_files[:2]:
+        img = Image.open(io.BytesIO(f.getvalue()))
+        border_width = min(int(img.size[0] * 0.75), 600)
+        st.caption(f"📷 {f.name}: {img.size[0]}x{img.size[1]}px → lebar border: {border_width}px")
     
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        process_button = st.button("🎨 PROSES SEMUA FOTO", type="primary", use_container_width=True)
-    
-    if process_button:
+    if st.button("🎨 TAMBAHKAN GEOTAG", type="primary", use_container_width=True):
         processed_images = []
         
-        with st.spinner(f"Memproses {len(uploaded_files)} foto..."):
+        map_img = get_static_map_image(latitude, longitude, 140, 140, 16)
+        
+        geotag_data = {
+            'location_name': location_name,
+            'address': address,
+            'latitude_text': latitude_text,
+            'longitude_text': longitude_text,
+            'date_text': date_text,
+            'map_image': map_img,
+            'latitude': latitude,
+            'longitude': longitude
+        }
+        
+        with st.spinner("Memproses..."):
             progress_bar = st.progress(0)
-            
             for idx, uploaded_file in enumerate(uploaded_files):
-                # Process image
-                processed_img = add_geotag_to_image(
-                    uploaded_file.getvalue(), 
-                    latitude, longitude, 
-                    datetime_str, 
-                    template_name, 
-                    custom_text
-                )
-                
-                processed_images.append((uploaded_file.name, processed_img))
+                processed_img = add_geotag_to_image(uploaded_file.getvalue(), geotag_data)
+                if processed_img:
+                    processed_images.append((uploaded_file.name, processed_img))
                 progress_bar.progress((idx + 1) / len(uploaded_files))
         
-        st.success(f"✅ Berhasil! {len(processed_images)} foto telah diproses")
-        
-        # Create ZIP download
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for original_name, img_bytes in processed_images:
-                name, ext = os.path.splitext(original_name)
-                new_name = f"{name}_geotagged{ext}"
-                zip_file.writestr(new_name, img_bytes.getvalue())
-        
-        zip_buffer.seek(0)
-        
-        # Download button
-        st.download_button(
-            label="📥 DOWNLOAD SEMUA (ZIP)",
-            data=zip_buffer,
-            file_name=f"geotagged_photos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-            mime="application/zip",
-            use_container_width=True
-        )
-        
-        # Preview results
-        st.subheader("📷 Preview Hasil")
-        cols = st.columns(3)
-        for idx, (name, img_bytes) in enumerate(processed_images[:6]):
-            with cols[idx % 3]:
-                st.image(img_bytes, caption=name[:30], use_container_width=True)
+        if processed_images:
+            st.balloons()
+            st.success(f"✅ {len(processed_images)} foto selesai")
+            
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for original_name, img_bytes in processed_images:
+                    name, ext = os.path.splitext(original_name)
+                    zip_file.writestr(f"{name}_geotagged{ext}", img_bytes.getvalue())
+            
+            zip_buffer.seek(0)
+            st.download_button("📥 DOWNLOAD ZIP", zip_buffer, 
+                              file_name=f"geotag_{datetime.now().strftime('%Y%m%d')}.zip",
+                              use_container_width=True)
+            
+            st.subheader("Hasil")
+            cols = st.columns(2)
+            for idx, (name, img_bytes) in enumerate(processed_images[:4]):
+                with cols[idx % 2]:
+                    st.image(img_bytes, caption=name, use_container_width=True)
 
-# Instructions
-with st.expander("ℹ️ Panduan Penggunaan", expanded=False):
-    st.markdown("""
-    ### Cara Menggunakan:
-    1. **Masukkan koordinat** - Bisa manual atau lihat peta
-    2. **Pilih template** - Ada 6 style berbeda
-    3. **Upload foto** - Bisa banyak sekaligus
-    4. **Klik proses** - Tunggu sebentar
-    5. **Download** - Semua foto akan di-zip
-    
-    ### Tips:
-    - Gunakan teks kustom untuk menambah keterangan lokasi
-    - Koordinat bisa dicari di Google Maps
-    - Format koordinat: desimal (contoh: -6.200000)
-    - Foto akan disimpan dengan kualitas original
-    """)
+# Map reference
+with st.expander("🗺️ Lihat Lokasi", expanded=False):
+    m = folium.Map(location=[latitude, longitude], zoom_start=13)
+    folium.Marker([latitude, longitude], popup=location_name,
+                  icon=folium.Icon(color='red')).add_to(m)
+    folium_static(m, width=700, height=400)
 
-# Footer
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: gray; padding: 1rem;">
-    <p>© 2024 Geotag Photo Editor | Dengan 6 Template Kustom | Support Multiple Files</p>
+<div style="text-align: center; color: gray;">
+    <p>✅ Lebar border = 3/4 lebar foto (max 800px) | ✅ Teks panjang tetap full | ✅ Tanggal format lengkap</p>
 </div>
 """, unsafe_allow_html=True)
