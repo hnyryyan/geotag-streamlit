@@ -415,7 +415,7 @@ with st.sidebar:
                    "Sunday": "Minggu"}.get(day_name, day_name)
         date_text = f"{day_ind}, {now.day:02d} {now.strftime('%b')} {now.year}"
     
-    st.subheader("👁️ Preview")
+    st.subheader("�️ Preview")
     
     # Get map image for preview
     map_img = get_static_map_image(latitude, longitude, 140, 140, 16)
